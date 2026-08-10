@@ -5,6 +5,7 @@
 #include <cstring>
 #include <numeric>
 #include <sstream>
+#include <stdexcept>
 
 namespace llaisys {
 
@@ -184,8 +185,88 @@ tensor_t Tensor::permute(const std::vector<size_t> &order) const {
 }
 
 tensor_t Tensor::view(const std::vector<size_t> &shape) const {
-    TO_BE_IMPLEMENTED();
-    return std::shared_ptr<Tensor>(new Tensor(_meta, _storage));
+    //判断new shape元素总数是否与原shape相等
+    size_t new_numel = std::accumulate(
+        shape.begin(),
+        shape.end(),
+        size_t(1),
+        std::multiplies<size_t>());
+
+    if (new_numel != this->numel()) {
+        throw std::runtime_error(
+            "View shape has a different number of elements.");
+    }
+
+    std::vector<ptrdiff_t> new_strides(shape.size());
+
+    if (this->ndim() == 0) {
+        std::fill(new_strides.begin(), new_strides.end(), 1);
+
+        TensorMeta meta{this->dtype(), shape, new_strides};
+        return std::shared_ptr<Tensor>(
+            new Tensor(std::move(meta), _storage, _offset));
+    }
+
+    size_t view_dim = shape.size();
+
+    size_t tensor_numel = 1;
+    size_t view_numel = 1;
+
+    ptrdiff_t chunk_base_stride = this->strides().back();
+
+    //寻找存储连续的最大chunk从后扫描new shape，找到能放在chunk中的连续元素
+    for (size_t tensor_dim = this->ndim(); tensor_dim-- > 0;) {
+        tensor_numel *= this->shape()[tensor_dim];
+
+        bool chunk_end =
+            tensor_dim == 0 ||
+            (this->shape()[tensor_dim - 1] != 1 &&
+             this->strides()[tensor_dim - 1] !=
+                 static_cast<ptrdiff_t>(tensor_numel) *
+                     chunk_base_stride);
+    //从后扫描new shape，找到能放在chunk中的连续元素
+        if (chunk_end) {
+            while (view_dim > 0 &&
+                   (view_numel < tensor_numel ||
+                    shape[view_dim - 1] == 1)) {
+
+                --view_dim;
+
+                new_strides[view_dim] =
+                    static_cast<ptrdiff_t>(view_numel) *
+                    chunk_base_stride;
+
+                view_numel *= shape[view_dim];
+            }
+
+            if (view_numel != tensor_numel) {
+                throw std::runtime_error(
+                    "Requested view is incompatible with tensor strides.");
+            }
+            //更新chunk
+            if (tensor_dim > 0) {
+                chunk_base_stride =
+                    this->strides()[tensor_dim - 1];
+
+                tensor_numel = 1;
+                view_numel = 1;
+            }
+        }
+    }
+    //判断是否放置完毕
+    if (view_dim != 0) {
+        throw std::runtime_error(
+            "Requested view is incompatible with tensor strides.");
+    }
+
+    TensorMeta meta{
+        this->dtype(),
+        shape,
+        new_strides,
+    };
+
+    return std::shared_ptr<Tensor>(
+        new Tensor(std::move(meta), _storage, _offset));
 }
 
 tensor_t Tensor::slice(size_t dim, size_t start, size_t end) const {
@@ -200,7 +281,7 @@ void Tensor::load(const void *src_) {
         src_,
         this->numel() * this->elementSize(),
         LLAISYS_MEMCPY_H2D);
-    //参考L156-161
+    //参考L157-162
 }
 
 tensor_t Tensor::contiguous() const {
