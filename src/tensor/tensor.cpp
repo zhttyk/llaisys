@@ -180,8 +180,38 @@ bool Tensor::isContiguous() const {
 }
 
 tensor_t Tensor::permute(const std::vector<size_t> &order) const {
-    TO_BE_IMPLEMENTED();
-    return std::shared_ptr<Tensor>(new Tensor(_meta, _storage));
+    //检查维度是否相同
+    if (order.size() != this->ndim()) {
+        throw std::invalid_argument(
+            "Permutation order must have the same number of dimensions as tensor.");
+    }
+
+    std::vector<bool> seen(this->ndim(), false);
+    std::vector<size_t> new_shape(this->ndim());
+    std::vector<ptrdiff_t> new_strides(this->ndim());
+
+    for (size_t i = 0; i < this->ndim(); ++i) {
+        size_t dim = order[i];
+
+        if (dim >= this->ndim() || seen[dim]) {
+            throw std::invalid_argument("Invalid permutation order.");
+        }
+
+        seen[dim] = true;
+
+        new_shape[i] = this->shape()[dim];
+        //使new stride顺序和permute后的shape的顺序保持相同
+        new_strides[i] = this->strides()[dim];
+    }
+
+    TensorMeta meta{
+        this->dtype(),
+        new_shape,
+        new_strides,
+    };
+
+    return std::shared_ptr<Tensor>(
+        new Tensor(std::move(meta), _storage, _offset));
 }
 
 tensor_t Tensor::view(const std::vector<size_t> &shape) const {
