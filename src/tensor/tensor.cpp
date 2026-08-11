@@ -180,7 +180,7 @@ bool Tensor::isContiguous() const {
 }
 
 tensor_t Tensor::permute(const std::vector<size_t> &order) const {
-    //检查维度是否相同
+    //检查维度是否无误
     if (order.size() != this->ndim()) {
         throw std::invalid_argument(
             "Permutation order must have the same number of dimensions as tensor.");
@@ -300,8 +300,32 @@ tensor_t Tensor::view(const std::vector<size_t> &shape) const {
 }
 
 tensor_t Tensor::slice(size_t dim, size_t start, size_t end) const {
-    TO_BE_IMPLEMENTED();
-    return std::shared_ptr<Tensor>(new Tensor(_meta, _storage));
+    if (dim >= this->ndim()) {
+        throw std::out_of_range("Slice dimension is out of range.");
+    }
+
+    if (start > end || end > this->shape()[dim]) {
+        throw std::out_of_range("Invalid slice range.");
+    }
+
+    std::vector<size_t> new_shape = this->shape();
+
+    new_shape[dim] = end - start;
+
+    TensorMeta meta{
+        this->dtype(),
+        new_shape,
+        this->strides(),
+    };
+
+    size_t new_offset =
+        _offset +
+        start *
+            static_cast<size_t>(this->strides()[dim]) *
+            this->elementSize();
+
+    return std::shared_ptr<Tensor>(
+        new Tensor(std::move(meta), _storage, new_offset));
 }
 
 void Tensor::load(const void *src_) {
