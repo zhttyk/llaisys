@@ -84,3 +84,10 @@ def load_qwen2(lib):
     lib.llaisysQwen2ModelWeights.restype = POINTER(
         LlaisysQwen2Weights
     )
+    lib.llaisysQwen2ModelInfer.argtypes = [
+        llaisysQwen2Model_t,
+        POINTER(c_int64),
+        c_size_t,
+    ]
+
+    lib.llaisysQwen2ModelInfer.restype = c_int64

@@ -19,6 +19,8 @@ public:
 
     LlaisysQwen2Weights *weights();
 
+    int64_t infer(const int64_t *token_ids, size_t ntoken);
+
 private:
     LlaisysQwen2Meta _meta;
     llaisysDeviceType_t _device;

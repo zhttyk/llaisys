@@ -36,12 +36,13 @@ LlaisysQwen2Weights *llaisysQwen2ModelWeights(
 }
 
 int64_t llaisysQwen2ModelInfer(
-    LlaisysQwen2Model *,
-    int64_t *,
-    size_t) {
+    LlaisysQwen2Model *model,
+    int64_t *token_ids,
+    size_t ntoken) {
 
-    // TODO: Implement inference.
-    return 0;
+    return model->model->infer(
+        token_ids,
+        ntoken);
 }
 
 } // __C
