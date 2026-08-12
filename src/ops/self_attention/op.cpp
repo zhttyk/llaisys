@@ -1,6 +1,11 @@
 #include "op.hpp"
 
+#include "../../core/llaisys_core.hpp"
 #include "../../utils.hpp"
+
+#ifdef ENABLE_NVIDIA_API
+#include "nvidia/self_attention_nvidia.cuh"
+#endif
 
 #include <cmath>
 #include <limits>
@@ -169,7 +174,30 @@ void self_attention(
         "SelfAttention: all tensors must be contiguous.");
 
     if (attn_val->deviceType() != LLAISYS_DEVICE_CPU) {
-        EXCEPTION_UNSUPPORTED_DEVICE;
+        llaisys::core::context().setDevice(
+            attn_val->deviceType(),
+            attn_val->deviceId());
+
+        switch (attn_val->deviceType()) {
+#ifdef ENABLE_NVIDIA_API
+        case LLAISYS_DEVICE_NVIDIA:
+            return nvidia::self_attention(
+                attn_val->data(),
+                q->data(),
+                k->data(),
+                v->data(),
+                attn_val->dtype(),
+                qlen,
+                kvlen,
+                nh,
+                nkvh,
+                hd,
+                scale,
+                llaisys::core::context().runtime().stream());
+#endif
+        default:
+            EXCEPTION_UNSUPPORTED_DEVICE;
+        }
     }
 
     switch (attn_val->dtype()) {
