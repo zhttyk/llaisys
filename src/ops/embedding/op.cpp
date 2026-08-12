@@ -1,6 +1,11 @@
 #include "op.hpp"
 
+#include "../../core/llaisys_core.hpp"
 #include "../../utils.hpp"
+
+#ifdef ENABLE_NVIDIA_API
+#include "nvidia/embedding_nvidia.cuh"
+#endif
 
 #include <cstring>
 
@@ -40,34 +45,55 @@ void embedding(tensor_t out, tensor_t index, tensor_t weight) {
             && weight->isContiguous(),
         "Embedding: all tensors must be contiguous.");
 
-    if (out->deviceType() != LLAISYS_DEVICE_CPU) {
-        EXCEPTION_UNSUPPORTED_DEVICE;
+    if (out->deviceType() == LLAISYS_DEVICE_CPU) {
+        const auto *indices =
+            reinterpret_cast<const int64_t *>(index->data());
+
+        auto *out_data = out->data();
+        const auto *weight_data = weight->data();
+
+        size_t num_indices = index->numel();
+        size_t vocab_size = weight->shape()[0];
+        size_t embedding_dim = weight->shape()[1];
+
+        size_t row_bytes =
+            embedding_dim * weight->elementSize();
+
+        for (size_t i = 0; i < num_indices; ++i) {
+            int64_t idx = indices[i];
+
+            CHECK_ARGUMENT(
+                idx >= 0 && static_cast<size_t>(idx) < vocab_size,
+                "Embedding: index out of range.");
+
+            std::memcpy(
+                out_data + i * row_bytes,
+                weight_data + static_cast<size_t>(idx) * row_bytes,
+                row_bytes);
+        }
+
+        return;
     }
 
-    const auto *indices =
-        reinterpret_cast<const int64_t *>(index->data());
+    llaisys::core::context().setDevice(
+        out->deviceType(), out->deviceId());
 
-    auto *out_data = out->data();
-    const auto *weight_data = weight->data();
+    switch (out->deviceType()) {
+#ifdef ENABLE_NVIDIA_API
+    case LLAISYS_DEVICE_NVIDIA:
+        return nvidia::embedding(
+            out->data(),
+            index->data(),
+            weight->data(),
+            out->dtype(),
+            index->numel(),
+            weight->shape()[0],
+            weight->shape()[1],
+            llaisys::core::context().runtime().stream());
+#endif
 
-    size_t num_indices = index->numel();
-    size_t vocab_size = weight->shape()[0];
-    size_t embedding_dim = weight->shape()[1];
-
-    size_t row_bytes =
-        embedding_dim * weight->elementSize();
-
-    for (size_t i = 0; i < num_indices; ++i) {
-        int64_t idx = indices[i];
-
-        CHECK_ARGUMENT(
-            idx >= 0 && static_cast<size_t>(idx) < vocab_size,
-            "Embedding: index out of range.");
-
-        std::memcpy(
-            out_data + i * row_bytes,
-            weight_data + static_cast<size_t>(idx) * row_bytes,
-            row_bytes);
+    default:
+        EXCEPTION_UNSUPPORTED_DEVICE;
     }
 }
 
