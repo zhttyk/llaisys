@@ -1,6 +1,11 @@
 #include "op.hpp"
 
+#include "../../core/llaisys_core.hpp"
 #include "../../utils.hpp"
+
+#ifdef ENABLE_NVIDIA_API
+#include "nvidia/swiglu_nvidia.cuh"
+#endif
 
 #include <cmath>
 
@@ -57,11 +62,27 @@ void swiglu(tensor_t out, tensor_t gate, tensor_t up) {
             && up->isContiguous(),
         "SwiGLU: all tensors must be contiguous.");
 
-    if (out->deviceType() != LLAISYS_DEVICE_CPU) {
-        EXCEPTION_UNSUPPORTED_DEVICE;
-    }
-
     size_t numel = out->numel();
+
+    if (out->deviceType() != LLAISYS_DEVICE_CPU) {
+        llaisys::core::context().setDevice(
+            out->deviceType(), out->deviceId());
+
+        switch (out->deviceType()) {
+#ifdef ENABLE_NVIDIA_API
+        case LLAISYS_DEVICE_NVIDIA:
+            return nvidia::swiglu(
+                out->data(),
+                gate->data(),
+                up->data(),
+                out->dtype(),
+                numel,
+                llaisys::core::context().runtime().stream());
+#endif
+        default:
+            EXCEPTION_UNSUPPORTED_DEVICE;
+        }
+    }
 
     switch (out->dtype()) {
     case LLAISYS_DTYPE_F32:
