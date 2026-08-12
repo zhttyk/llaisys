@@ -47,7 +47,17 @@ llaisysStream_t createStream() {
 }
 
 void destroyStream(llaisysStream_t stream) {
-    checkCuda(cudaStreamDestroy(reinterpret_cast<cudaStream_t>(stream)));
+    cudaError_t err =
+        cudaStreamDestroy(reinterpret_cast<cudaStream_t>(stream));
+
+    // During process shutdown another CUDA user (for example PyTorch)
+    // may unload the CUDA runtime before our thread-local Context is
+    // destroyed. At that point stream cleanup can no longer be executed.
+    if (err == cudaErrorCudartUnloading) {
+        return;
+    }
+
+    checkCuda(err);
 }
 
 void streamSynchronize(llaisysStream_t stream) {
