@@ -1,6 +1,11 @@
 #include "op.hpp"
 
+#include "../../core/llaisys_core.hpp"
 #include "../../utils.hpp"
+
+#ifdef ENABLE_NVIDIA_API
+#include "nvidia/argmax_nvidia.cuh"
+#endif
 
 namespace {
 
@@ -52,36 +57,52 @@ void argmax(tensor_t max_idx, tensor_t max_val, tensor_t vals) {
             && vals->isContiguous(),
         "Argmax: all tensors must be contiguous.");
 
-    if (vals->deviceType() != LLAISYS_DEVICE_CPU) {
-        EXCEPTION_UNSUPPORTED_DEVICE;
+    if (vals->deviceType() == LLAISYS_DEVICE_CPU) {
+        auto *idx = reinterpret_cast<int64_t *>(max_idx->data());
+
+        switch (vals->dtype()) {
+        case LLAISYS_DTYPE_F32:
+            return argmax_cpu(
+                idx,
+                reinterpret_cast<float *>(max_val->data()),
+                reinterpret_cast<const float *>(vals->data()),
+                vals->numel());
+
+        case LLAISYS_DTYPE_F16:
+            return argmax_cpu(
+                idx,
+                reinterpret_cast<llaisys::fp16_t *>(max_val->data()),
+                reinterpret_cast<const llaisys::fp16_t *>(vals->data()),
+                vals->numel());
+
+        case LLAISYS_DTYPE_BF16:
+            return argmax_cpu(
+                idx,
+                reinterpret_cast<llaisys::bf16_t *>(max_val->data()),
+                reinterpret_cast<const llaisys::bf16_t *>(vals->data()),
+                vals->numel());
+
+        default:
+            EXCEPTION_UNSUPPORTED_DATATYPE(vals->dtype());
+        }
     }
 
-    auto *idx = reinterpret_cast<int64_t *>(max_idx->data());
+    llaisys::core::context().setDevice(vals->deviceType(), vals->deviceId());
 
-    switch (vals->dtype()) {
-    case LLAISYS_DTYPE_F32:
-        return argmax_cpu(
-            idx,
-            reinterpret_cast<float *>(max_val->data()),
-            reinterpret_cast<const float *>(vals->data()),
-            vals->numel());
-
-    case LLAISYS_DTYPE_F16:
-        return argmax_cpu(
-            idx,
-            reinterpret_cast<llaisys::fp16_t *>(max_val->data()),
-            reinterpret_cast<const llaisys::fp16_t *>(vals->data()),
-            vals->numel());
-
-    case LLAISYS_DTYPE_BF16:
-        return argmax_cpu(
-            idx,
-            reinterpret_cast<llaisys::bf16_t *>(max_val->data()),
-            reinterpret_cast<const llaisys::bf16_t *>(vals->data()),
-            vals->numel());
+    switch (vals->deviceType()) {
+#ifdef ENABLE_NVIDIA_API
+    case LLAISYS_DEVICE_NVIDIA:
+        return nvidia::argmax(
+            max_idx->data(),
+            max_val->data(),
+            vals->data(),
+            vals->dtype(),
+            vals->numel(),
+            llaisys::core::context().runtime().stream());
+#endif
 
     default:
-        EXCEPTION_UNSUPPORTED_DATATYPE(vals->dtype());
+        EXCEPTION_UNSUPPORTED_DEVICE;
     }
 }
 
