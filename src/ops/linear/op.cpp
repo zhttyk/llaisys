@@ -1,6 +1,11 @@
 #include "op.hpp"
 
+#include "../../core/llaisys_core.hpp"
 #include "../../utils.hpp"
+
+#ifdef ENABLE_NVIDIA_API
+#include "nvidia/linear_nvidia.cuh"
+#endif
 
 namespace {
 
@@ -94,13 +99,32 @@ void linear(tensor_t out, tensor_t in, tensor_t weight, tensor_t bias) {
             && weight->isContiguous(),
         "Linear: out, input and weight must be contiguous.");
 
-    if (out->deviceType() != LLAISYS_DEVICE_CPU) {
-        EXCEPTION_UNSUPPORTED_DEVICE;
-    }
-
     size_t m = in->shape()[0];
     size_t k = in->shape()[1];
     size_t n = weight->shape()[0];
+
+    if (out->deviceType() != LLAISYS_DEVICE_CPU) {
+        llaisys::core::context().setDevice(
+            out->deviceType(), out->deviceId());
+
+        switch (out->deviceType()) {
+#ifdef ENABLE_NVIDIA_API
+        case LLAISYS_DEVICE_NVIDIA:
+            return nvidia::linear(
+                out->data(),
+                in->data(),
+                weight->data(),
+                bias ? bias->data() : nullptr,
+                out->dtype(),
+                m,
+                n,
+                k,
+                llaisys::core::context().runtime().stream());
+#endif
+        default:
+            EXCEPTION_UNSUPPORTED_DEVICE;
+        }
+    }
 
     switch (out->dtype()) {
     case LLAISYS_DTYPE_F32:
