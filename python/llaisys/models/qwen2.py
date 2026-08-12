@@ -1,6 +1,6 @@
 from typing import Sequence
 from pathlib import Path
-from ctypes import byref, c_int, c_size_t, c_void_p
+from ctypes import byref, c_int, c_int64, c_size_t, c_void_p
 import json
 import struct
 
@@ -80,6 +80,8 @@ class Qwen2:
         )
 
         self._nlayer = config["num_hidden_layers"]
+        self._end_token = eos_token_id
+        self._maxseq = config["max_position_embeddings"]
 
         # ------------------------------------------------------------
         # 2. Create the native C++ model.
@@ -354,5 +356,42 @@ class Qwen2:
         top_p: float = 0.8,
         temperature: float = 0.8,
     ):
-        # TODO: Implement generate function
-        return []
+        # The native infer function currently returns argmax directly,
+        # so this baseline implementation supports greedy decoding only.
+        if top_k != 1:
+            raise NotImplementedError(
+                "Qwen2 generation currently supports greedy decoding only."
+            )
+
+        output = list(inputs)
+
+        if not output:
+            raise ValueError("Input token sequence must not be empty.")
+
+        if max_new_tokens is None:
+            max_new_tokens = self._maxseq - len(output)
+
+        if max_new_tokens < 0:
+            raise ValueError("max_new_tokens must be non-negative.")
+
+        if len(output) + max_new_tokens > self._maxseq:
+            raise ValueError(
+                "Requested generation exceeds maximum sequence length."
+            )
+
+        for _ in range(max_new_tokens):
+            token_array = (c_int64 * len(output))(*output)
+
+            next_token = LIB_LLAISYS.llaisysQwen2ModelInfer(
+                self._model,
+                token_array,
+                len(output),
+            )
+
+            next_token = int(next_token)
+            output.append(next_token)
+
+            if next_token == self._end_token:
+                break
+
+        return output
