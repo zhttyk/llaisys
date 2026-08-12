@@ -1,6 +1,11 @@
 #include "op.hpp"
 
+#include "../../core/llaisys_core.hpp"
 #include "../../utils.hpp"
+
+#ifdef ENABLE_NVIDIA_API
+#include "nvidia/rope_nvidia.cuh"
+#endif
 
 #include <cmath>
 #include <vector>
@@ -111,13 +116,32 @@ void rope(tensor_t out, tensor_t in, tensor_t pos_ids, float theta) {
             && pos_ids->isContiguous(),
         "RoPE: all tensors must be contiguous.");
 
-    if (out->deviceType() != LLAISYS_DEVICE_CPU) {
-        EXCEPTION_UNSUPPORTED_DEVICE;
-    }
-
     size_t seq_len = in->shape()[0];
     size_t n_heads = in->shape()[1];
     size_t head_dim = in->shape()[2];
+
+    if (out->deviceType() != LLAISYS_DEVICE_CPU) {
+        llaisys::core::context().setDevice(
+            out->deviceType(), out->deviceId());
+
+        switch (out->deviceType()) {
+#ifdef ENABLE_NVIDIA_API
+        case LLAISYS_DEVICE_NVIDIA:
+            return nvidia::rope(
+                out->data(),
+                in->data(),
+                pos_ids->data(),
+                out->dtype(),
+                seq_len,
+                n_heads,
+                head_dim,
+                theta,
+                llaisys::core::context().runtime().stream());
+#endif
+        default:
+            EXCEPTION_UNSUPPORTED_DEVICE;
+        }
+    }
 
     const auto *positions =
         reinterpret_cast<const int64_t *>(pos_ids->data());
