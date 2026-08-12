@@ -48,6 +48,17 @@ private:
 
     llaisysTensor_t createTensor(const std::vector<size_t> &shape);
     void destroyTensor(llaisysTensor_t tensor);
+    // Dynamic KV cache.
+    std::vector<tensor_t> _k_cache;
+    std::vector<tensor_t> _v_cache;
+
+    size_t _cache_len = 0;
+    size_t _cache_capacity = 0;
+
+    std::vector<int64_t> _token_history;
+
+    void resetCache();
+    void ensureCacheCapacity(size_t required);
 };
 
 } // namespace llaisys::models

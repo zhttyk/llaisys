@@ -13,6 +13,8 @@
 #include <cmath>
 #include <numeric>
 #include <vector>
+#include <algorithm>
+#include <cstring>
 
 namespace {
 
@@ -23,6 +25,82 @@ llaisys::tensor_t unwrap(llaisysTensor_t tensor) {
 } // namespace
 
 namespace llaisys::models {
+
+void Qwen2Model::resetCache() {
+    _k_cache.clear();
+    _v_cache.clear();
+
+    _k_cache.resize(_meta.nlayer);
+    _v_cache.resize(_meta.nlayer);
+
+    _cache_len = 0;
+    _cache_capacity = 0;
+    _token_history.clear();
+}
+
+void Qwen2Model::ensureCacheCapacity(size_t required) {
+    if (required <= _cache_capacity) {
+        return;
+    }
+
+    size_t new_capacity =
+        _cache_capacity == 0
+            ? required
+            : _cache_capacity;
+
+    while (new_capacity < required) {
+        new_capacity *= 2;
+
+        if (new_capacity > _meta.maxseq) {
+            new_capacity = _meta.maxseq;
+            break;
+        }
+    }
+
+    CHECK_ARGUMENT(
+        new_capacity >= required,
+        "Qwen2: unable to grow KV cache.");
+
+    const size_t cached_bytes =
+        _cache_len
+        * _meta.nkvh
+        * _meta.dh
+        * utils::dsize(_meta.dtype);
+
+    for (size_t layer = 0;
+         layer < _meta.nlayer;
+         ++layer) {
+
+        auto new_k = Tensor::create(
+            {new_capacity, _meta.nkvh, _meta.dh},
+            _meta.dtype,
+            _device,
+            _device_id);
+
+        auto new_v = Tensor::create(
+            {new_capacity, _meta.nkvh, _meta.dh},
+            _meta.dtype,
+            _device,
+            _device_id);
+
+        if (_cache_len > 0) {
+            std::memcpy(
+                new_k->data(),
+                _k_cache[layer]->data(),
+                cached_bytes);
+
+            std::memcpy(
+                new_v->data(),
+                _v_cache[layer]->data(),
+                cached_bytes);
+        }
+
+        _k_cache[layer] = std::move(new_k);
+        _v_cache[layer] = std::move(new_v);
+    }
+
+    _cache_capacity = new_capacity;
+}
 
 int64_t Qwen2Model::infer(
     const int64_t *token_ids,
@@ -44,6 +122,35 @@ int64_t Qwen2Model::infer(
         _device == LLAISYS_DEVICE_CPU,
         "Qwen2: inference currently supports CPU only.");
 
+    bool decode =
+        _cache_len > 0
+        && _cache_len == _token_history.size()
+        && ntoken == _token_history.size() + 1
+        && std::equal(
+            _token_history.begin(),
+            _token_history.end(),
+            token_ids);
+
+    if (!decode) {
+        resetCache();
+    }
+
+    const size_t qlen =
+        decode ? 1 : ntoken;
+
+    const size_t start_pos =
+        decode ? _cache_len : 0;
+
+    const size_t new_cache_len =
+        start_pos + qlen;
+
+    const int64_t *current_tokens =
+        decode
+            ? token_ids + ntoken - 1
+            : token_ids;
+
+    ensureCacheCapacity(new_cache_len);
+
     const size_t kv_dim =
         _meta.nkvh * _meta.dh;
 
@@ -55,21 +162,22 @@ int64_t Qwen2Model::infer(
     // Token ids and position ids.
     // ------------------------------------------------------------
     auto tokens = Tensor::create(
-        {ntoken},
+        {qlen},
         LLAISYS_DTYPE_I64,
         _device,
         _device_id);
 
-    tokens->load(token_ids);
+    tokens->load(current_tokens);
 
-    std::vector<int64_t> position_data(ntoken);
-    std::iota(
-        position_data.begin(),
-        position_data.end(),
-        int64_t{0});
+    std::vector<int64_t> position_data(qlen);
+
+    for (size_t i = 0; i < qlen; ++i) {
+        position_data[i] =
+            static_cast<int64_t>(start_pos + i);
+    }
 
     auto positions = Tensor::create(
-        {ntoken},
+        {qlen},
         LLAISYS_DTYPE_I64,
         _device,
         _device_id);
@@ -81,7 +189,7 @@ int64_t Qwen2Model::infer(
     // hidden: [seq, hs]
     // ------------------------------------------------------------
     auto hidden = Tensor::create(
-        {ntoken, _meta.hs},
+        {qlen, _meta.hs},
         _meta.dtype,
         _device,
         _device_id);
@@ -106,7 +214,7 @@ int64_t Qwen2Model::infer(
         auto residual = hidden;
 
         auto attn_norm = Tensor::create(
-            {ntoken, _meta.hs},
+            {qlen, _meta.hs},
             _meta.dtype,
             _device,
             _device_id);
@@ -119,7 +227,7 @@ int64_t Qwen2Model::infer(
 
         // Q: [seq, hs]
         auto q_2d = Tensor::create(
-            {ntoken, _meta.hs},
+            {qlen, _meta.hs},
             _meta.dtype,
             _device,
             _device_id);
@@ -132,7 +240,7 @@ int64_t Qwen2Model::infer(
 
         // K: [seq, nkvh * dh]
         auto k_2d = Tensor::create(
-            {ntoken, kv_dim},
+            {qlen, kv_dim},
             _meta.dtype,
             _device,
             _device_id);
@@ -145,7 +253,7 @@ int64_t Qwen2Model::infer(
 
         // V: [seq, nkvh * dh]
         auto v_2d = Tensor::create(
-            {ntoken, kv_dim},
+            {qlen, kv_dim},
             _meta.dtype,
             _device,
             _device_id);
@@ -161,24 +269,24 @@ int64_t Qwen2Model::infer(
         // K [seq, nkvh, dh]
         // V [seq, nkvh, dh]
         auto q = q_2d->view(
-            {ntoken, _meta.nh, _meta.dh});
+            {qlen, _meta.nh, _meta.dh});
 
         auto k = k_2d->view(
-            {ntoken, _meta.nkvh, _meta.dh});
+            {qlen, _meta.nkvh, _meta.dh});
 
         auto v = v_2d->view(
-            {ntoken, _meta.nkvh, _meta.dh});
+            {qlen, _meta.nkvh, _meta.dh});
 
         // RoPE output must be contiguous, so allocate
         // separate output tensors rather than doing it in-place.
         auto q_rope = Tensor::create(
-            {ntoken, _meta.nh, _meta.dh},
+            {qlen, _meta.nh, _meta.dh},
             _meta.dtype,
             _device,
             _device_id);
 
         auto k_rope = Tensor::create(
-            {ntoken, _meta.nkvh, _meta.dh},
+            {qlen, _meta.nkvh, _meta.dh},
             _meta.dtype,
             _device,
             _device_id);
@@ -195,26 +303,61 @@ int64_t Qwen2Model::infer(
             positions,
             _meta.theta);
 
-        // Full-sequence causal attention.
-        // No KV cache in this first implementation.
+        // Causal attention over the current query and cached K/V.
         auto attn_3d = Tensor::create(
-            {ntoken, _meta.nh, _meta.dh},
+            {qlen, _meta.nh, _meta.dh},
             _meta.dtype,
             _device,
             _device_id);
 
+        const size_t cache_write_bytes =
+            qlen
+            * _meta.nkvh
+            * _meta.dh
+            * utils::dsize(_meta.dtype);
+
+        auto k_dst = _k_cache[layer]->slice(
+            0,
+            start_pos,
+            new_cache_len);
+
+        auto v_dst = _v_cache[layer]->slice(
+            0,
+            start_pos,
+            new_cache_len);
+
+        std::memcpy(
+            k_dst->data(),
+            k_rope->data(),
+            cache_write_bytes);
+
+        std::memcpy(
+            v_dst->data(),
+            v->data(),
+            cache_write_bytes);
+
+        auto k_all = _k_cache[layer]->slice(
+            0,
+            0,
+            new_cache_len);
+
+        auto v_all = _v_cache[layer]->slice(
+            0,
+            0,
+            new_cache_len);
+
         ops::self_attention(
             attn_3d,
             q_rope,
-            k_rope,
-            v,
+            k_all,
+            v_all,
             scale);
 
         auto attn_2d = attn_3d->view(
-            {ntoken, _meta.hs});
+            {qlen, _meta.hs});
 
         auto attn_out = Tensor::create(
-            {ntoken, _meta.hs},
+            {qlen, _meta.hs},
             _meta.dtype,
             _device,
             _device_id);
@@ -227,7 +370,7 @@ int64_t Qwen2Model::infer(
 
         // hidden = residual + attention_output
         auto post_attn = Tensor::create(
-            {ntoken, _meta.hs},
+            {qlen, _meta.hs},
             _meta.dtype,
             _device,
             _device_id);
@@ -244,7 +387,7 @@ int64_t Qwen2Model::infer(
         auto mlp_residual = post_attn;
 
         auto mlp_norm = Tensor::create(
-            {ntoken, _meta.hs},
+            {qlen, _meta.hs},
             _meta.dtype,
             _device,
             _device_id);
@@ -256,13 +399,13 @@ int64_t Qwen2Model::infer(
             _meta.epsilon);
 
         auto gate = Tensor::create(
-            {ntoken, _meta.di},
+            {qlen, _meta.di},
             _meta.dtype,
             _device,
             _device_id);
 
         auto up = Tensor::create(
-            {ntoken, _meta.di},
+            {qlen, _meta.di},
             _meta.dtype,
             _device,
             _device_id);
@@ -280,7 +423,7 @@ int64_t Qwen2Model::infer(
             nullptr);
 
         auto activated = Tensor::create(
-            {ntoken, _meta.di},
+            {qlen, _meta.di},
             _meta.dtype,
             _device,
             _device_id);
@@ -291,7 +434,7 @@ int64_t Qwen2Model::infer(
             up);
 
         auto mlp_out = Tensor::create(
-            {ntoken, _meta.hs},
+            {qlen, _meta.hs},
             _meta.dtype,
             _device,
             _device_id);
@@ -303,7 +446,7 @@ int64_t Qwen2Model::infer(
             nullptr);
 
         hidden = Tensor::create(
-            {ntoken, _meta.hs},
+            {qlen, _meta.hs},
             _meta.dtype,
             _device,
             _device_id);
@@ -318,14 +461,14 @@ int64_t Qwen2Model::infer(
     // We only need logits for the LAST token.
     //
     // Avoid allocating:
-    //   [ntoken, vocab_size]
+    //   [qlen, vocab_size]
     //
     // Slice first, then final norm and lm_head.
     // ------------------------------------------------------------
     auto last_hidden = hidden->slice(
         0,
-        ntoken - 1,
-        ntoken);
+        qlen - 1,
+        qlen);
 
     auto final_hidden = Tensor::create(
         {1, _meta.hs},
@@ -371,8 +514,17 @@ int64_t Qwen2Model::infer(
         max_val,
         logits);
 
-    return *reinterpret_cast<int64_t *>(
-        max_idx->data());
+    int64_t next_token =
+        *reinterpret_cast<int64_t *>(
+            max_idx->data());
+
+    _cache_len = new_cache_len;
+
+    _token_history.assign(
+        token_ids,
+        token_ids + ntoken);
+
+    return next_token;
 }
 
 } // namespace llaisys::models
