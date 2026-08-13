@@ -1,5 +1,7 @@
 #include "model.hpp"
 
+#include "../../core/llaisys_core.hpp"
+
 #include "../../ops/add/op.hpp"
 #include "../../ops/argmax/op.hpp"
 #include "../../ops/embedding/op.hpp"
@@ -20,6 +22,38 @@ namespace {
 
 llaisys::tensor_t unwrap(llaisysTensor_t tensor) {
     return tensor->tensor;
+}
+
+void runtimeCopySync(
+    llaisysDeviceType_t device_type,
+    int device_id,
+    void *dst,
+    const void *src,
+    size_t size,
+    llaisysMemcpyKind_t kind) {
+
+    if (size == 0) {
+        return;
+    }
+
+    auto &ctx = llaisys::core::context();
+    ctx.setDevice(device_type, device_id);
+
+    auto &runtime = ctx.runtime();
+
+    // Finish previous work issued to the runtime stream before
+    // performing a synchronous copy.
+    runtime.synchronize();
+
+    runtime.api()->memcpy_sync(
+        dst,
+        src,
+        size,
+        kind);
+
+    // Also ensure the copy is complete before the caller reuses
+    // or releases either buffer.
+    runtime.synchronize();
 }
 
 } // namespace
@@ -84,15 +118,21 @@ void Qwen2Model::ensureCacheCapacity(size_t required) {
             _device_id);
 
         if (_cache_len > 0) {
-            std::memcpy(
+            runtimeCopySync(
+                _device,
+                _device_id,
                 new_k->data(),
                 _k_cache[layer]->data(),
-                cached_bytes);
+                cached_bytes,
+                LLAISYS_MEMCPY_D2D);
 
-            std::memcpy(
+            runtimeCopySync(
+                _device,
+                _device_id,
                 new_v->data(),
                 _v_cache[layer]->data(),
-                cached_bytes);
+                cached_bytes,
+                LLAISYS_MEMCPY_D2D);
         }
 
         _k_cache[layer] = std::move(new_k);
@@ -117,10 +157,6 @@ int64_t Qwen2Model::infer(
     CHECK_ARGUMENT(
         ntoken <= _meta.maxseq,
         "Qwen2: input sequence exceeds maximum length.");
-
-    CHECK_ARGUMENT(
-        _device == LLAISYS_DEVICE_CPU,
-        "Qwen2: inference currently supports CPU only.");
 
     bool decode =
         _cache_len > 0
@@ -326,15 +362,21 @@ int64_t Qwen2Model::infer(
             start_pos,
             new_cache_len);
 
-        std::memcpy(
+        runtimeCopySync(
+            _device,
+            _device_id,
             k_dst->data(),
             k_rope->data(),
-            cache_write_bytes);
+            cache_write_bytes,
+            LLAISYS_MEMCPY_D2D);
 
-        std::memcpy(
+        runtimeCopySync(
+            _device,
+            _device_id,
             v_dst->data(),
             v->data(),
-            cache_write_bytes);
+            cache_write_bytes,
+            LLAISYS_MEMCPY_D2D);
 
         auto k_all = _k_cache[layer]->slice(
             0,
@@ -514,9 +556,15 @@ int64_t Qwen2Model::infer(
         max_val,
         logits);
 
-    int64_t next_token =
-        *reinterpret_cast<int64_t *>(
-            max_idx->data());
+    int64_t next_token = 0;
+
+    runtimeCopySync(
+        _device,
+        _device_id,
+        &next_token,
+        max_idx->data(),
+        sizeof(next_token),
+        LLAISYS_MEMCPY_D2H);
 
     _cache_len = new_cache_len;
 
