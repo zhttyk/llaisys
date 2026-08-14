@@ -137,6 +137,7 @@ void linear(tensor_t out, tensor_t in, tensor_t weight, tensor_t bias) {
                 k,
                 llaisys::core::context().runtime().stream());
 #endif
+        case LLAISYS_DEVICE_TYPE_COUNT:
         default:
             EXCEPTION_UNSUPPORTED_DEVICE;
         }

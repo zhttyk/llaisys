@@ -214,6 +214,7 @@ void self_attention(
                 scale,
                 llaisys::core::context().runtime().stream());
 #endif
+        case LLAISYS_DEVICE_TYPE_COUNT:
         default:
             EXCEPTION_UNSUPPORTED_DEVICE;
         }

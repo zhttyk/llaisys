@@ -126,6 +126,7 @@ void rms_norm(tensor_t out, tensor_t in, tensor_t weight, float eps) {
                 eps,
                 llaisys::core::context().runtime().stream());
 #endif
+        case LLAISYS_DEVICE_TYPE_COUNT:
         default:
             EXCEPTION_UNSUPPORTED_DEVICE;
         }

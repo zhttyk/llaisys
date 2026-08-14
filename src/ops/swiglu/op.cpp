@@ -92,6 +92,7 @@ void swiglu(tensor_t out, tensor_t gate, tensor_t up) {
                 numel,
                 llaisys::core::context().runtime().stream());
 #endif
+        case LLAISYS_DEVICE_TYPE_COUNT:
         default:
             EXCEPTION_UNSUPPORTED_DEVICE;
         }

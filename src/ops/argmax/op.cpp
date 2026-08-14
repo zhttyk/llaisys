@@ -114,6 +114,7 @@ void argmax(tensor_t max_idx, tensor_t max_val, tensor_t vals) {
             llaisys::core::context().runtime().stream());
 #endif
 
+    case LLAISYS_DEVICE_TYPE_COUNT:
     default:
         EXCEPTION_UNSUPPORTED_DEVICE;
     }
