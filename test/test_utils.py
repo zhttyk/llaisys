@@ -1,6 +1,14 @@
 import llaisys
 import torch
 
+# Keep MUSA reference computations in full FP32 for numerical
+# correctness comparisons with LLAISYS kernels.
+if (
+    hasattr(torch.backends, "mudnn")
+    and hasattr(torch.backends.mudnn, "allow_tf32")
+):
+    torch.backends.mudnn.allow_tf32 = False
+
 
 def random_tensor(
     shape, dtype_name, device_name, device_id=0, scale=None, bias=None
@@ -188,6 +196,8 @@ def torch_device(device_name: str, device_id=0):
         return torch.device("cpu")
     elif device_name == "nvidia":
         return torch.device(f"cuda:{device_id}")
+    elif device_name == "musa":
+        return torch.device(f"musa:{device_id}")
     else:
         raise ValueError(f"Unsupported device name: {device_name}")
 
@@ -197,6 +207,8 @@ def llaisys_device(device_name: str):
         return llaisys.DeviceType.CPU
     elif device_name == "nvidia":
         return llaisys.DeviceType.NVIDIA
+    elif device_name == "musa":
+        return llaisys.DeviceType.MUSA
     else:
         raise ValueError(f"Unsupported device name: {device_name}")
 
@@ -206,6 +218,8 @@ def device_name(llaisys_device: llaisys.DeviceType):
         return "cpu"
     elif llaisys_device == llaisys.DeviceType.NVIDIA:
         return "nvidia"
+    elif llaisys_device == llaisys.DeviceType.MUSA:
+        return "musa"
     else:
         raise ValueError(f"Unsupported llaisys device: {llaisys_device}")
 
