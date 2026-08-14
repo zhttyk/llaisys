@@ -107,6 +107,7 @@ void embedding(tensor_t out, tensor_t index, tensor_t weight) {
             llaisys::core::context().runtime().stream());
 #endif
 
+    case LLAISYS_DEVICE_TYPE_COUNT:
     default:
         EXCEPTION_UNSUPPORTED_DEVICE;
     }
