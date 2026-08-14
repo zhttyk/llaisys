@@ -6,6 +6,9 @@
 #ifdef ENABLE_NVIDIA_API
 #include "nvidia/self_attention_nvidia.cuh"
 #endif
+#ifdef ENABLE_MUSA_API
+#include "musa/self_attention_musa.muh"
+#endif
 
 #include <cmath>
 #include <limits>
@@ -182,6 +185,22 @@ void self_attention(
 #ifdef ENABLE_NVIDIA_API
         case LLAISYS_DEVICE_NVIDIA:
             return nvidia::self_attention(
+                attn_val->data(),
+                q->data(),
+                k->data(),
+                v->data(),
+                attn_val->dtype(),
+                qlen,
+                kvlen,
+                nh,
+                nkvh,
+                hd,
+                scale,
+                llaisys::core::context().runtime().stream());
+#endif
+#ifdef ENABLE_MUSA_API
+        case LLAISYS_DEVICE_MUSA:
+            return musa::self_attention(
                 attn_val->data(),
                 q->data(),
                 k->data(),

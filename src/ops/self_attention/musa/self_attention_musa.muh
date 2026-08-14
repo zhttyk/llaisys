@@ -1,0 +1,23 @@
+#pragma once
+
+#include "llaisys.h"
+
+#include <cstddef>
+
+namespace llaisys::ops::musa {
+
+void self_attention(
+    std::byte *out,
+    const std::byte *q,
+    const std::byte *k,
+    const std::byte *v,
+    llaisysDataType_t type,
+    size_t qlen,
+    size_t kvlen,
+    size_t nh,
+    size_t nkvh,
+    size_t hd,
+    float scale,
+    llaisysStream_t stream);
+
+} // namespace llaisys::ops::musa
